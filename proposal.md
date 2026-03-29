@@ -80,7 +80,7 @@ This is an initial sketch intended for discussion and refinement.
 
 ### Implementation Reference
 
-A working implementation exists in **Porter**, a Flight SQL server built on DuckDB, which supports:
+A working implementation exists in **[Porter](https://github.com/TFMV/porter)**, a Flight SQL server built on DuckDB, which supports:
 
 * gRPC-based Flight SQL transport
 * WebSocket-based streaming transport
