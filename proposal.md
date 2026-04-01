@@ -133,32 +133,30 @@ Execute(query) -> stream
 
 ---
 
-``
 ┌──────────────────────────────┐
-│        Client / Query        │
+│ Client / Query               │
 └─────────────┬────────────────┘
               │
               ▼
 ┌──────────────────────────────┐
-│           VGI API            │
-│  Execute / Producer / etc    │
+│ VGI API                      │
+│ Execute / Producer / etc     │
 └─────────────┬────────────────┘
               │ Arrow streams
               ▼
 ┌──────────────────────────────┐
-│      Transport Layer         │
-│  streams + framing + QoS     │
+│ Transport Layer              │
+│ streams + framing + QoS      │
 └─────────────┬────────────────┘
               ▼
 ┌──────────────────────────────┐
-│      Arrow IPC contract      │
-│   schema + batches only      │
+│ Arrow IPC contract           │
+│ schema + batches only        │
 └─────────────┬────────────────┘
               ▼
 ┌──────────────────────────────┐
-│         DuckDB runtime       │
+│ DuckDB runtime               │
 └──────────────────────────────┘
-``
 
 ## Future Extensions
 
