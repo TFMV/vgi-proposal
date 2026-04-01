@@ -1,175 +1,193 @@
-## [PROPOSAL] WebSocket Transport for Apache Arrow Flight
+# Proposal: VGI Execution Layer over Arrow-Native QUIC Transport
 
-### Summary
+## Overview
 
-This proposal suggests adding an optional WebSocket transport for Apache Arrow Flight to enable browser-native and lightweight client access while preserving existing gRPC semantics.
+This proposal outlines a clean separation of concerns between:
 
----
+* A **general-purpose Arrow-native transport layer over QUIC**
+* A **DuckDB-backed execution layer (VGI)** built on top of that transport
 
-### Motivation
+The goal is to align on a minimal, composable architecture that can serve both as:
 
-Apache Arrow Flight provides a high-performance RPC framework over gRPC for columnar data transfer. However, direct browser support remains limited due to lack of native gRPC support in browser environments.
-
-Today, browser-based usage typically requires intermediary layers (e.g., Node.js proxies or gRPC-Web gateways), which introduce additional operational complexity and latency.
-
-As interactive, browser-first data applications become more common, this gap is increasingly limiting.
+1. A **reference implementation** for distributed DuckDB execution (VGI)
+2. A **foundation for standardizing Arrow-native streaming over QUIC** across the broader ecosystem
 
 ---
 
-### Problem
+## Key Idea
 
-Flight’s reliance on gRPC makes it difficult to use directly from browser environments, resulting in:
+Separate **data transport** from **query execution**:
 
-* Additional proxy infrastructure
-* Increased system complexity
-* Reduced end-to-end streaming efficiency
-* Fragmented client implementations
-
-There is interest in a simpler path for browser and lightweight clients to consume Arrow Flight streams directly.
+* Transport should be **database-agnostic** and reusable
+* Execution should be **pluggable** and optimized for DuckDB (initially)
 
 ---
 
-### Proposal
+## Architecture
 
-Introduce an optional **WebSocket transport binding for Arrow Flight** that:
+### Layer 1: Arrow-Native Transport over QUIC
 
-* Preserves existing Flight semantics (DoGet, DoPut, DoExchange, Ticket, FlightDescriptor, etc.)
-* Uses WebSocket as a transport layer for streaming Arrow IPC messages
-* Supports binary streaming of RecordBatch, Schema, and related IPC messages
-* Coexists with existing gRPC transport without modification to core semantics
+A minimal transport abstraction for streaming Arrow data:
 
-This is not a replacement for gRPC, but an additional transport option.
+**Core responsibilities:**
 
----
+* Bidirectional streaming over QUIC
+* Arrow IPC message framing
+* Schema + RecordBatch transmission
+* Flow control and backpressure
+* Stream lifecycle management
 
-### Design Goals
+**Conceptual interface:**
 
-1. **Protocol Compatibility**
+```
+OpenStream() -> Stream
 
-   * Maintain existing Flight message types and semantics without modification.
+Stream:
+  SendSchema(schema)
+  SendRecordBatch(batch)
+  Recv() -> (schema | batch)
+  Close()
+```
 
-2. **Browser Compatibility**
+**Properties:**
 
-   * Enable direct use of standard WebSocket APIs in browsers.
-
-3. **Streaming Support**
-
-   * Support bidirectional streaming of Arrow IPC messages over a persistent connection.
-
-4. **Minimal Overhead**
-
-   * Prefer a direct mapping of Arrow IPC messages to WebSocket binary frames where possible.
-
-5. **Optional Transport**
-
-   * Servers may expose both gRPC and WebSocket endpoints concurrently.
+* Transport-agnostic interface (QUIC as first implementation)
+* Zero-copy friendly
+* Multiplexed streams
+* Backpressure-aware
 
 ---
 
-### Sketch of Approach
+### Layer 2: VGI (DuckDB Execution Layer)
 
-* Client establishes a WebSocket connection to a Flight endpoint (e.g., `wss://host/flight`).
-* Initial handshake carries Flight metadata equivalent to existing gRPC metadata where applicable.
-* Flight operations (e.g., DoGet) are expressed as message sequences over the WebSocket connection.
-* Arrow IPC messages are transmitted as binary frames.
-* Each stream maintains ordering and backpressure semantics consistent with Flight behavior.
+A thin execution interface built on DuckDB and Arrow.
 
-This is an initial sketch intended for discussion and refinement.
+**Core abstraction:**
 
----
+```
+Execute(query string) -> ArrowStream
+```
 
-### Implementation Reference
+**Responsibilities:**
 
-A working implementation exists in **[Porter](https://github.com/TFMV/porter)**, a Flight SQL server built on DuckDB, which supports:
+* Execute queries using DuckDB
+* Emit results as Arrow RecordBatches
+* Map execution to transport streams
+* Support unary and streaming queries
 
-* gRPC-based Flight SQL transport
-* WebSocket-based streaming transport
-* Shared execution and planning layer across both transports
+**Key idea:**
 
-This demonstrates feasibility of mapping Flight semantics onto WebSocket transport without changes to core execution logic.
+VGI acts as a modern equivalent of CGI:
 
----
-
-### Open Questions
-
-Feedback is requested on the following:
-
-* Message framing: 1:1 IPC-to-frame mapping vs. lightweight batching
-* Authentication: reuse of existing Flight auth mechanisms vs. browser-native approaches
-* Backpressure: representation over WebSocket transport
-* Error mapping: translation between Flight status codes and WebSocket semantics
-* URI scheme: formalization of `ws://` / `wss://` in Flight Location definitions
-* Standardization scope: formal specification vs. recommended extension pattern
+* Input: query / function call
+* Execution: DuckDB (with extensions)
+* Output: Arrow stream
 
 ---
 
-### Related Work
+## Design Principles
 
-This proposal is intended to be complementary to existing Flight and gRPC-Web efforts, not a replacement.
+### 1. Arrow-Native End-to-End
 
----
+* No row-based translation
+* Columnar data flows through the entire system
 
-### Motivation Summary
+### 2. Streaming First
 
-This work aims to reduce friction for browser-native and lightweight clients consuming Arrow Flight streams, without changing the core Flight execution model.
+* Results are streamed incrementally
+* Avoid full materialization when possible
 
----
+### 3. Composability
 
-### Discussion
+* Nodes can call other nodes
+* Streams can be pipelined across services
 
-If there is interest from the community, I would be happy to:
+### 4. Minimal Surface Area
 
-* Contribute a formal specification draft
-* Iterate on the Porter reference implementation
-* Provide performance comparisons between gRPC and WebSocket transports
-
----
-
-### Minimal Client Model
-
-At minimum, a browser client should be able to:
-
-* Connect to a Flight endpoint
-* Issue a Ticket or FlightDescriptor
-* Receive a stream of Arrow RecordBatches
-* Consume results incrementally
-
-WebSocket transport is proposed as a way to simplify this path while preserving Flight semantics.
+* Keep interfaces small and explicit
+* Avoid premature abstraction
 
 ---
 
-## Performance Observations (Preliminary)
+## MVP Scope
 
-**Configuration**
+### Transport
 
-Apple M4 32GB
+* QUIC-based implementation
+* Single stream per query
+* Arrow IPC framing
 
-* 4 concurrent clients
-* 3 iterations per client (12 total operations)
-* Query: 2M rows, 4 columns (8M values/query)
-* Total processed: 24M rows (~732 MB logical data)
+### VGI Node
 
-**Results**
+* Embedded DuckDB
+* Single endpoint:
 
-| Metric        | WebSocket    | FlightSQL (gRPC) |
-| ------------- | ------------ | ---------------- |
-| Rows/sec      | 130.7M       | 121.7M           |
-| Throughput    | 1014.32 MB/s | 928.53 MB/s      |
-| Latency (p50) | 26 ms        | 17 ms            |
-| Latency (p95) | 41 ms        | 60 ms            |
-| Latency (p99) | 41 ms        | 60 ms            |
+```
+Execute(query) -> stream
+```
 
-**Observations**
+* Supports:
 
-* WebSocket shows higher sustained throughput (~9% higher in this run).
-* FlightSQL has better median latency, but worse tail latency (p95/p99 divergence).
-* WebSocket tail latency is tighter, suggesting more stable streaming behavior under load.
-* Both transports are in the same performance class; differences are workload and scheduling-sensitive rather than structural.
+  * Unary queries
+  * Streaming result sets
 
+---
 
-**Caveats**
+## Future Extensions
 
-* Results reflect a single implementation and workload and should not be generalized without further validation.
-* Client-side processing differs between transports; decode and read-time metrics are not directly comparable.
-* Measurements are sensitive to batching behavior, buffering, and driver/runtime implementation details.
-* Additional benchmarking across varied workloads, data shapes, and deployment environments is required to draw broader conclusions.
+### Distributed Execution
+
+* Query delegation across nodes
+* Pipeline execution (node-to-node streaming)
+
+### Extension Execution
+
+* Remote invocation of DuckDB extensions
+* Treat extensions as network-accessible primitives
+
+### Transport Generalization
+
+* Alternative transports (TCP, Unix sockets)
+* Standardization of Arrow streaming protocol
+
+---
+
+## Strategic Positioning
+
+* **VGI** becomes the reference model for DuckDB-based distributed execution
+* **Arrow-over-QUIC** becomes a reusable transport primitive for the broader ecosystem
+
+This allows both layers to evolve independently while remaining tightly integrated.
+
+---
+
+## Summary
+
+This proposal defines:
+
+* A **clean execution boundary** for DuckDB (VGI)
+* A **reusable transport layer** for Arrow streaming over QUIC
+
+Together, they enable:
+
+* High-performance, streaming query execution
+* Composable distributed data pipelines
+* A potential standard for Arrow-native transport systems
+
+---
+
+## Open Questions
+
+* Stream framing details for Arrow IPC over QUIC
+* Backpressure semantics across distributed pipelines
+* Error propagation and cancellation model
+* Query planning vs delegation boundaries
+
+---
+
+## Next Steps
+
+1. Implement minimal Arrow-over-QUIC transport
+2. Build VGI prototype on top of transport
+3. Validate streaming performance under load
+4. Iterate on protocol and execution model
